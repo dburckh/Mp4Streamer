@@ -95,16 +95,15 @@ public class Remuxer implements MediaParser.OutputConsumer, Runnable {
         }
     }
 
-    @OptIn(markerClass = UnstableApi.class) @Override
-    public void onTrackDataFound(int trackIndex, @NonNull MediaParser.TrackData trackData) {
-        final MediaFormat mediaFormat = trackData.mediaFormat;
+    @OptIn(markerClass = UnstableApi.class)
+    public static Format getFormat(MediaFormat mediaFormat) {
         final String mimeType = mediaFormat.getString(MediaFormat.KEY_MIME);
         final Format.Builder builder = new Format.Builder().setSampleMimeType(mimeType);
         if (mimeType.startsWith(MimeTypes.BASE_TYPE_VIDEO)) {
             builder.setWidth(mediaFormat.getInteger(MediaFormat.KEY_WIDTH))
                     .setHeight(mediaFormat.getInteger(MediaFormat.KEY_HEIGHT));
             if (mediaFormat.containsKey(MediaFormat.KEY_ROTATION)) {
-                mMp4Muxer.setOrientation(mediaFormat.getInteger(MediaFormat.KEY_ROTATION));
+                builder.setRotationDegrees(mediaFormat.getInteger(MediaFormat.KEY_ROTATION));
             }
         } else if (mimeType.startsWith(MimeTypes.BASE_TYPE_AUDIO)) {
             builder.setChannelCount(mediaFormat.getInteger(MediaFormat.KEY_CHANNEL_COUNT))
@@ -118,7 +117,14 @@ public class Remuxer implements MediaParser.OutputConsumer, Runnable {
         ByteBuffer csd1 = mediaFormat.getByteBuffer("csd-1");
         appendByteBuffer(csd1, csdList);
         builder.setInitializationData(csdList);
-        final Format format = builder.build();
+        return builder.build();
+    }
+
+    @OptIn(markerClass = UnstableApi.class) @Override
+    public void onTrackDataFound(int trackIndex, @NonNull MediaParser.TrackData trackData) {
+        final Format format = getFormat(trackData.mediaFormat);
+        mMp4Muxer.setOrientation(format.rotationDegrees);
+
         final Mp4Muxer.TrackToken trackToken = mMp4Muxer.addTrack(trackIndex, format);
         mTokenMap.put(trackIndex, trackToken);
     }

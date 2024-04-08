@@ -73,8 +73,6 @@ public final class FragmentedMp4Writer extends Mp4Writer {
 
   private final GatheringByteChannel channel;
 
-  private long position;
-
   public FragmentedMp4Writer(
       GatheringByteChannel gatheringByteChannel,
       Mp4MoovStructure moovGenerator,
@@ -131,7 +129,7 @@ public final class FragmentedMp4Writer extends Mp4Writer {
   }
 
   private static ImmutableList<ByteBuffer> createTrafBoxes(
-      List<ProcessedTrackInfo> trackInfos, long moofBoxStartPosition) {
+      List<ProcessedTrackInfo> trackInfos) {
     ImmutableList.Builder<ByteBuffer> trafBoxes = new ImmutableList.Builder<>();
     int moofBoxSize = calculateMoofBoxSize(trackInfos);
     int mdatBoxHeaderSize = BOX_HEADER_SIZE;
@@ -142,7 +140,7 @@ public final class FragmentedMp4Writer extends Mp4Writer {
       ProcessedTrackInfo currentTrackInfo = trackInfos.get(i);
       trafBoxes.add(
           Boxes.traf(
-              Boxes.tfhd(currentTrackInfo.trackId, /* baseDataOffset= */ moofBoxStartPosition),
+              Boxes.tfhd(currentTrackInfo.trackId),
               Boxes.trun(currentTrackInfo.pendingSamplesMetadata, dataOffset)));
       dataOffset += currentTrackInfo.totalSamplesSize;
     }
@@ -176,10 +174,10 @@ public final class FragmentedMp4Writer extends Mp4Writer {
     return moofBoxHeaderSize + mfhdBoxSize + trafBoxesSize;
   }
 
-  private void createHeader() throws IOException {
+  private long createHeader() throws IOException {
     ByteBuffer[] headers = {Boxes.ftyp(), moovGenerator.moovMetadataHeader(
                     tracks, /* minInputPtsUs= */ 0L, /* isFragmentedMp4= */ true)};
-    position += channel.write(headers);
+    return channel.write(headers);
   }
 
   private boolean shouldFlushPendingSamples(
@@ -204,7 +202,7 @@ public final class FragmentedMp4Writer extends Mp4Writer {
 
   private static final ByteBuffer[] EMPTY_BYTEBUFFERS = new ByteBuffer[0];
 
-  private void createFragment() throws IOException {
+  private long createFragment() throws IOException {
     /* Each fragment looks like:
     moof
         mfhd
@@ -218,17 +216,18 @@ public final class FragmentedMp4Writer extends Mp4Writer {
      */
     ImmutableList<ProcessedTrackInfo> trackInfos = processAllTracks();
     ImmutableList<ByteBuffer> trafBoxes =
-        createTrafBoxes(trackInfos, /* moofBoxStartPosition= */ position);
+        createTrafBoxes(trackInfos);
     if (trafBoxes.isEmpty()) {
-      return;
+      return 0L;
     }
     final ArrayList<ByteBuffer> list = new ArrayList<>();
     list.add(Boxes.moof(Boxes.mfhd(currentFragmentSequenceNumber), trafBoxes));
 
     createMdatBox(list);
 
-    position += channel.write(list.toArray(EMPTY_BYTEBUFFERS));
+    final long written = channel.write(list.toArray(EMPTY_BYTEBUFFERS));
     currentFragmentSequenceNumber++;
+    return written;
   }
 
   private void createMdatBox(List<ByteBuffer> list) {

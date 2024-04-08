@@ -151,7 +151,7 @@ public final class Mp4Muxer {
      */
     @CanIgnoreReturnValue
     public Mp4Muxer.Builder setFragmentedMp4Enabled(boolean enabled) {
-      if (enabled && !isFileChannel()) {
+      if (!enabled && !isFileChannel()) {
         throw new IllegalArgumentException("Default Muxer Requires FileChannel (FileInputStream)");
       }
       fragmentedMp4Enabled = enabled;

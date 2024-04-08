@@ -7,10 +7,10 @@
     tools:context=".MainActivity">
 
     <com.homesoft.muxer.AutoFixSurfaceView
-        android:layout_margin="16dp"
         android:id="@+id/surfaceView"
         android:layout_width="0dp"
         android:layout_height="0dp"
+        android:layout_margin="16dp"
         app:layout_constraintDimensionRatio="3:4"
         app:layout_constraintEnd_toEndOf="parent"
         app:layout_constraintStart_toStartOf="parent"
@@ -21,10 +21,23 @@
         android:layout_width="wrap_content"
         android:layout_height="wrap_content"
         android:text="Stream"
+        app:layout_constraintTop_toBottomOf="@+id/surfaceView"
+        app:layout_constraintBottom_toTopOf="@id/url"
+        app:layout_constraintEnd_toEndOf="parent"
+        app:layout_constraintStart_toStartOf="parent"
+        app:layout_constraintVertical_chainStyle="packed"
+        />
+
+    <TextView
+        android:id="@+id/url"
+        android:layout_width="wrap_content"
+        android:layout_height="wrap_content"
+        android:visibility="invisible"
+        android:text="Text"
         app:layout_constraintBottom_toBottomOf="parent"
         app:layout_constraintEnd_toEndOf="parent"
         app:layout_constraintStart_toStartOf="parent"
-        app:layout_constraintTop_toBottomOf="@+id/surfaceView" />
+        app:layout_constraintTop_toBottomOf="@+id/stream" />
 
 
 </androidx.constraintlayout.widget.ConstraintLayout>

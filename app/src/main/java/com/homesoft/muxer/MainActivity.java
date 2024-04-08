@@ -8,25 +8,33 @@ import androidx.appcompat.app.AppCompatActivity;
 import androidx.constraintlayout.widget.ConstraintLayout;
 import androidx.lifecycle.ViewModelProvider;
 import androidx.media3.common.MimeTypes;
+import androidx.media3.common.util.UnstableApi;
 
 import android.Manifest;
+import android.content.ContentResolver;
+import android.net.Uri;
 import android.os.Bundle;
 import android.util.Log;
 import android.util.Size;
 import android.view.Surface;
 import android.view.SurfaceHolder;
 import android.view.SurfaceView;
+import android.view.View;
 import android.widget.Button;
+import android.widget.TextView;
 
+import java.net.InetSocketAddress;
 import java.util.ArrayList;
 import java.util.concurrent.Executor;
 import java.util.concurrent.Executors;
 
-public class MainActivity extends AppCompatActivity implements SurfaceHolder.Callback {
+@UnstableApi public class MainActivity extends AppCompatActivity implements SurfaceHolder.Callback {
     private static final String TAG = MainActivity.class.getSimpleName();
     private AutoFixSurfaceView surfaceView;
 
     private Button stream;
+
+    private TextView url;
 
     private CameraViewModel cameraViewModel;
 
@@ -49,14 +57,17 @@ public class MainActivity extends AppCompatActivity implements SurfaceHolder.Cal
         cameraViewModel = new ViewModelProvider.AndroidViewModelFactory(getApplication()).create(CameraViewModel.class);
         stream = findViewById(R.id.stream);
         stream.setOnClickListener((v)-> {
+            InetSocketAddress inetSocketAddress;
             if (cameraViewModel.isStreaming()) {
                 cameraViewModel.stopStream();
+                inetSocketAddress = null;
             } else {
-                cameraViewModel.startStream();
+                inetSocketAddress = cameraViewModel.startStream();
             }
-            updateButton();
+            updateButton(inetSocketAddress);
         });
-        updateButton();
+        url = findViewById(R.id.url);
+        updateButton(null);
         surfaceView = findViewById(R.id.surfaceView);
         surfaceView.getHolder().addCallback(this);
     }
@@ -119,8 +130,15 @@ public class MainActivity extends AppCompatActivity implements SurfaceHolder.Cal
         }
     }
 
-    private void updateButton() {
+    @Nullable
+    private void updateButton(InetSocketAddress inetSocketAddress) {
         String text = cameraViewModel.isStreaming() ? "Stop" : "Stream";
         stream.setText(text);
+        if (inetSocketAddress != null) {
+            url.setVisibility(View.VISIBLE);
+            url.setText("http:/" + inetSocketAddress);
+        } else {
+            url.setVisibility(View.INVISIBLE);
+        }
     }
 }

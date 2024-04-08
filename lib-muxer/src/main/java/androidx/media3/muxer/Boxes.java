@@ -59,7 +59,7 @@ import java.util.Locale;
 
   public static final int MFHD_BOX_CONTENT_SIZE = 2 * BYTES_PER_INTEGER;
 
-  public static final int TFHD_BOX_CONTENT_SIZE = 4 * BYTES_PER_INTEGER;
+  public static final int TFHD_BOX_CONTENT_SIZE = 2 * BYTES_PER_INTEGER;
 
   // unsigned int(2) sample_depends_on = 2 (bit index 25 and 24)
   private static final int TRUN_BOX_SYNC_SAMPLE_FLAGS = 0b00000010_00000000_00000000_00000000;
@@ -865,12 +865,12 @@ import java.util.Locale;
   }
 
   /** Returns a track fragment header (tfhd) box. */
-  public static ByteBuffer tfhd(int trackId, long baseDataOffset) {
+  public static ByteBuffer tfhd(int trackId) {
     ByteBuffer contents = ByteBuffer.allocate(TFHD_BOX_CONTENT_SIZE);
     // 0x000001 base-data-offset-present: indicates the presence of the base-data-offset field.
-    contents.putInt(0x0 | 0x000001); // version and flags
+    contents.putInt(0x0 ); // version and flags
     contents.putInt(trackId);
-    contents.putLong(baseDataOffset);
+    //contents.putLong(baseDataOffset);
     contents.flip();
     return BoxUtils.wrapIntoBox("tfhd", contents);
   }

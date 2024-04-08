@@ -4,6 +4,8 @@ import android.Manifest;
 import android.annotation.SuppressLint;
 import android.app.Activity;
 import android.app.Application;
+import android.content.ContentResolver;
+import android.content.ContentValues;
 import android.content.Context;
 import android.content.pm.PackageManager;
 import android.graphics.ImageFormat;
@@ -19,31 +21,57 @@ import android.hardware.camera2.params.StreamConfigurationMap;
 import android.media.MediaCodec;
 import android.media.MediaCodecInfo;
 import android.media.MediaFormat;
+import android.net.ConnectivityManager;
+import android.net.LinkAddress;
+import android.net.LinkProperties;
+import android.net.Network;
+import android.net.NetworkCapabilities;
+import android.net.NetworkRequest;
+import android.net.Uri;
 import android.os.Build;
 import android.os.Handler;
+import android.os.HandlerThread;
 import android.os.Looper;
+import android.provider.MediaStore;
 import android.util.Log;
 import android.util.Range;
 import android.util.Size;
 import android.util.SparseIntArray;
 import android.view.Surface;
 import android.view.SurfaceHolder;
-import android.view.SurfaceView;
 
 import androidx.annotation.NonNull;
 import androidx.annotation.Nullable;
+import androidx.annotation.OptIn;
 import androidx.annotation.UiThread;
 import androidx.core.content.ContextCompat;
 import androidx.lifecycle.AndroidViewModel;
+import androidx.media3.common.Format;
+import androidx.media3.common.util.UnstableApi;
+import androidx.media3.muxer.Mp4Muxer;
+
+import org.eclipse.jetty.server.Request;
+import org.eclipse.jetty.server.Server;
+import org.eclipse.jetty.server.handler.AbstractHandler;
+
+import javax.servlet.ServletException;
+import javax.servlet.http.HttpServletRequest;
+import javax.servlet.http.HttpServletResponse;
 
 import java.io.IOException;
+import java.io.OutputStream;
+import java.net.Inet4Address;
+import java.net.InetAddress;
+import java.net.InetSocketAddress;
+import java.nio.ByteBuffer;
+import java.nio.channels.ClosedChannelException;
 import java.util.ArrayList;
 import java.util.Arrays;
-import java.util.Comparator;
-import java.util.List;
 import java.util.concurrent.Executor;
 
-public class CameraViewModel extends AndroidViewModel {
+@UnstableApi public class CameraViewModel extends AndroidViewModel {
+    private static final int ONE_US = 1_000_000;
+    private static final int FRAGMENT_DURATION_US = ONE_US;
     /**
      * Conversion from screen rotation to JPEG orientation.
      */
@@ -61,8 +89,10 @@ public class CameraViewModel extends AndroidViewModel {
     private static int getPixels(Size size) {
         return size.getWidth() * size.getHeight();
     }
-    //private final HandlerThread handlerThread = new HandlerThread("Camera");
+    private final HandlerThread handlerThread = new HandlerThread("Camera");
     private final Handler mainHandler = new Handler(Looper.getMainLooper());
+
+    private final ConnectivityManager connectivityManager;
 
     private final Executor executor = mainHandler::post;
 
@@ -87,6 +117,24 @@ public class CameraViewModel extends AndroidViewModel {
         }
     };
 
+    private final ConnectivityManager.NetworkCallback networkCallback =
+            new ConnectivityManager.NetworkCallback() {
+        @Override
+        public void onAvailable(@NonNull Network network) {
+            LinkProperties linkProperties = connectivityManager.getLinkProperties(network);
+            if (linkProperties != null) {
+                InetAddress inetAddress = null;
+                for (LinkAddress linkAddress : linkProperties.getLinkAddresses()) {
+                    inetAddress = linkAddress.getAddress();
+                    if (inetAddress instanceof Inet4Address) {
+                        break;
+                    }
+                }
+                CameraViewModel.this.inetAddress = inetAddress;
+            }
+        }
+    };
+
     private final MediaCodec.Callback callback = new MediaCodec.Callback() {
         @Override
         public void onInputBufferAvailable(@NonNull MediaCodec codec, int index) {
@@ -95,8 +143,25 @@ public class CameraViewModel extends AndroidViewModel {
 
         @Override
         public void onOutputBufferAvailable(@NonNull MediaCodec codec, int index, @NonNull MediaCodec.BufferInfo info) {
+
+            if ((info.flags & MediaCodec.BUFFER_FLAG_CODEC_CONFIG) == 0) {
+                try {
+                    if ((info.flags & MediaCodec.BUFFER_FLAG_END_OF_STREAM) > 0) {
+                        mMp4Muxer.close();
+                        mMp4Muxer = null;
+                    } else {
+                        final ByteBuffer byteBuffer = codec.getOutputBuffer(index);
+                        final ByteBuffer copy = ByteBuffer.allocateDirect(byteBuffer.remaining());
+                        copy.put(byteBuffer);
+                        copy.flip();
+                        mMp4Muxer.writeSampleData(trackToken, copy, info);
+                        //Log.d(TAG, "writeSampleData() ts=" + info.presentationTimeUs / 1000 + " flags=" + info.flags);
+                    }
+                } catch (IOException e) {
+                    throw new RuntimeException(e);
+                }
+            }
             codec.releaseOutputBuffer(index, false);
-            Log.d(TAG, "onOutputBufferAvailable()");
         }
 
         @Override
@@ -104,9 +169,35 @@ public class CameraViewModel extends AndroidViewModel {
 
         }
 
-        @Override
-        public void onOutputFormatChanged(@NonNull MediaCodec codec, @NonNull MediaFormat format) {
+        @OptIn(markerClass = UnstableApi.class) @Override
+        public void onOutputFormatChanged(@NonNull MediaCodec codec, @NonNull MediaFormat mediaFormat) {
+//            final ContentResolver contentResolver = getApplication().getContentResolver();
+//            Uri outUri = getUri(MediaStore.Video.Media.getContentUri(MediaStore.VOLUME_EXTERNAL_PRIMARY),
+//                    "Test", "video/mp4");
+//            ParcelFileDescriptor outPfd = null;
+//            try {
+//                outPfd = contentResolver.openFileDescriptor(outUri, "w");
+//                FileOutputStream out = new FileOutputStream(outPfd.getFileDescriptor());
+//                FileChannel fileChannel = out.getChannel();
+//                mMp4Muxer = new Mp4Muxer.Builder(fileChannel).setFragmentedMp4Enabled(true).build();
+//                final Format format = Remuxer.getFormat(mediaFormat);
+//                mMp4Muxer.setOrientation(sensorRotation);
+//
+//                trackToken = mMp4Muxer.addTrack(0, format);
+//            } catch (FileNotFoundException e) {
+//                throw new RuntimeException(e);
+//            }
 
+            // Hack to deal with in-exact key frame rates
+            int fragmentDurationUs = FRAGMENT_DURATION_US >= ONE_US ? (FRAGMENT_DURATION_US - ONE_US / 4) : FRAGMENT_DURATION_US;
+            mMp4Muxer = new Mp4Muxer.Builder(fragmentServer = new FragmentServer())
+                    .setFragmentedMp4Enabled(true)
+                    .setFragmentDurationUs(fragmentDurationUs)
+                    .build();
+            final Format format = Remuxer.getFormat(mediaFormat);
+            mMp4Muxer.setOrientation(sensorRotation);
+
+            trackToken = mMp4Muxer.addTrack(0, format);
         }
     };
 
@@ -115,6 +206,8 @@ public class CameraViewModel extends AndroidViewModel {
 
     @Nullable
     private SurfaceHolder surfaceHolder;
+
+    private Handler workHandler;
 
     @Nullable
     private Surface codecSurface;
@@ -130,14 +223,28 @@ public class CameraViewModel extends AndroidViewModel {
     private int sensorRotation;
     private Range<Integer> selectedFps;
 
+    private InetAddress inetAddress;
+
     @Nullable
     private MediaCodec mediaCodec;
 
     private MediaFormat mediaFormat;
 
     private boolean streaming;
+
+    @Nullable
+    private Mp4Muxer mMp4Muxer;
+    private Mp4Muxer.TrackToken trackToken;
+
+    private FragmentServer fragmentServer;
+
+    private Server jetty;
+
     public CameraViewModel(@NonNull Application application) {
         super(application);
+        connectivityManager = (ConnectivityManager)application.getSystemService(Context.CONNECTIVITY_SERVICE);
+        connectivityManager.registerNetworkCallback(new NetworkRequest.Builder().addTransportType(NetworkCapabilities.TRANSPORT_WIFI).build(), networkCallback);
+        handlerThread.start();
     }
 
     public boolean hasCameraPermission() {
@@ -199,9 +306,9 @@ public class CameraViewModel extends AndroidViewModel {
                             int pixelsPerSecond = selectedFps.getUpper() * imageSize.getWidth() * imageSize.getHeight();
                             //Try 1/8 or 12.5%
                             mediaFormat.setInteger(MediaFormat.KEY_BIT_RATE, (pixelsPerSecond / 8));
-                            mediaFormat.setInteger(MediaFormat.KEY_I_FRAME_INTERVAL, 1);
+                            mediaFormat.setInteger(MediaFormat.KEY_I_FRAME_INTERVAL, FRAGMENT_DURATION_US / ONE_US);
                             mediaCodec.configure(mediaFormat, null, null, MediaCodec.CONFIGURE_FLAG_ENCODE);
-                            mediaCodec.setCallback(callback);
+                            mediaCodec.setCallback(callback, getWorkHandler());
                             codecSurface = mediaCodec.createInputSurface();
                             mediaCodec.start();
                         } catch (IOException e) {
@@ -217,6 +324,19 @@ public class CameraViewModel extends AndroidViewModel {
             }
         }
         return mediaCodec != null;
+    }
+
+    @Nullable
+    public InetAddress getInetAddress() {
+        return inetAddress;
+    }
+
+    @UiThread
+    private Handler getWorkHandler() {
+        if (workHandler == null) {
+            workHandler = new Handler(handlerThread.getLooper());
+        }
+        return workHandler;
     }
 
     @Nullable
@@ -334,29 +454,85 @@ public class CameraViewModel extends AndroidViewModel {
         return streaming;
     }
 
+    private Uri getUri(Uri collection, String fileName, String mimeType) throws UnsupportedOperationException {
+        ContentResolver resolver = getApplication().getContentResolver();
 
+        ContentValues newMediaValues = new ContentValues();
+        newMediaValues.put(MediaStore.MediaColumns.DISPLAY_NAME, fileName);
+        newMediaValues.put(MediaStore.MediaColumns.MIME_TYPE, mimeType);
+
+        return resolver.insert(collection, newMediaValues);
+    }
     @UiThread
-    public void startStream() {
+    public InetSocketAddress startStream() {
         if (mediaCodec != null) {
             updateCameraCaptureSession(codecSurface);
             streaming = true;
-            // TODO: Start webserver
+            if (inetAddress != null) {
+                InetSocketAddress inetSocketAddress = new InetSocketAddress("192.168.0.143",8080);
+                getWorkHandler().post(()->{
+                    jetty = new Server(inetSocketAddress);
+                    jetty.setHandler(new ServletHandler());
+                    try {
+                        jetty.start();
+                    } catch (Exception e) {
+                        throw new RuntimeException(e);
+                    }
+                });
+                return inetSocketAddress;
+            }
         }
+        return null;
     }
 
-    @UiThread
+    @OptIn(markerClass = UnstableApi.class) @UiThread
     public void stopStream() {
         if (mediaCodec != null) {
             updateCameraCaptureSession(null);
+            mediaCodec.signalEndOfInputStream();
             streaming = false;
+//            if (jetty != null) {
+//                try {
+//                    jetty.stop();
+//                    jetty = null;
+//                } catch (Exception e) {
+//                    throw new RuntimeException(e);
+//                }
+//            }
         }
     }
+
+
 
     @Override
     protected void onCleared() {
         super.onCleared();
         if (mediaCodec != null) {
             mediaCodec.release();
+        }
+        connectivityManager.unregisterNetworkCallback(networkCallback);
+    }
+
+    class ServletHandler extends AbstractHandler {
+        @Override
+        public void handle(String target, Request baseRequest, HttpServletRequest request, HttpServletResponse response) throws IOException, ServletException {
+            response.setHeader("content-type", "video/mp4");
+            OutputStream out = response.getOutputStream();
+            try {
+                out.write(fragmentServer.getHeader().array());
+                //out.flush();
+                ByteBuffer byteBuffer = null;
+                while (true) {
+                    byteBuffer = fragmentServer.getFragment(byteBuffer);
+                    Log.d(TAG, "Sending " + byteBuffer.remaining());
+                    out.write(byteBuffer.array());
+                    out.flush();
+                }
+            } catch (InterruptedException | ClosedChannelException e) {
+
+            }
+            Log.d(TAG, "Closed");
+            out.close();
         }
     }
 }
