@@ -153,7 +153,12 @@ import java.util.concurrent.Executor;
                         mMp4Muxer = null;
                         fragmentServer.close();
                         fragmentServer = null;
-                        mediaCodec.flush(); //I'm hoping this will cause the codec to restart at an I-Frame
+                        updateCameraCaptureSession(null);
+                        codecSurface.release();
+                        codecSurface = null;
+                        mediaCodec.stop();
+                        restartMediaCodec();
+                        configureCamera(cameraDevice, surfaceHolder, codecSurface);
                         jetty.setStopTimeout(1_000L);
                         jetty.stop();
                         jetty = null;
@@ -181,23 +186,6 @@ import java.util.concurrent.Executor;
 
         @OptIn(markerClass = UnstableApi.class) @Override
         public void onOutputFormatChanged(@NonNull MediaCodec codec, @NonNull MediaFormat mediaFormat) {
-//            final ContentResolver contentResolver = getApplication().getContentResolver();
-//            Uri outUri = getUri(MediaStore.Video.Media.getContentUri(MediaStore.VOLUME_EXTERNAL_PRIMARY),
-//                    "Test", "video/mp4");
-//            ParcelFileDescriptor outPfd = null;
-//            try {
-//                outPfd = contentResolver.openFileDescriptor(outUri, "w");
-//                FileOutputStream out = new FileOutputStream(outPfd.getFileDescriptor());
-//                FileChannel fileChannel = out.getChannel();
-//                mMp4Muxer = new Mp4Muxer.Builder(fileChannel).setFragmentedMp4Enabled(true).build();
-//                final Format format = Remuxer.getFormat(mediaFormat);
-//                mMp4Muxer.setOrientation(sensorRotation);
-//
-//                trackToken = mMp4Muxer.addTrack(0, format);
-//            } catch (FileNotFoundException e) {
-//                throw new RuntimeException(e);
-//            }
-
             // Hack to deal with in-exact key frame rates
             int fragmentDurationUs = FRAGMENT_DURATION_US >= ONE_US ? (FRAGMENT_DURATION_US - ONE_US / 4) : FRAGMENT_DURATION_US;
             mMp4Muxer = new Mp4Muxer.Builder(fragmentServer = new FragmentServer())
@@ -261,6 +249,13 @@ import java.util.concurrent.Executor;
         return ContextCompat.checkSelfPermission(getApplication(), Manifest.permission.CAMERA) == PackageManager.PERMISSION_GRANTED;
     }
 
+    private void restartMediaCodec() {
+        mediaCodec.setCallback(callback, getWorkHandler());
+        mediaCodec.configure(mediaFormat, null, null, MediaCodec.CONFIGURE_FLAG_ENCODE);
+        codecSurface = mediaCodec.createInputSurface();
+        mediaCodec.start();
+    }
+
     /**
      * Locates a suitable camera and sets up the MediaCodec
      */
@@ -317,10 +312,7 @@ import java.util.concurrent.Executor;
                             //Try 1/8 or 12.5%
                             mediaFormat.setInteger(MediaFormat.KEY_BIT_RATE, (pixelsPerSecond / 8));
                             mediaFormat.setInteger(MediaFormat.KEY_I_FRAME_INTERVAL, FRAGMENT_DURATION_US / ONE_US);
-                            mediaCodec.configure(mediaFormat, null, null, MediaCodec.CONFIGURE_FLAG_ENCODE);
-                            mediaCodec.setCallback(callback, getWorkHandler());
-                            codecSurface = mediaCodec.createInputSurface();
-                            mediaCodec.start();
+                            restartMediaCodec();
                         } catch (IOException e) {
                             Log.e(TAG, "createEncoderByType()");
                         }
