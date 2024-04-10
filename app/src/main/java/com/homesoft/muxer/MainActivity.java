@@ -3,11 +3,9 @@ package com.homesoft.muxer;
 import androidx.activity.result.ActivityResultLauncher;
 import androidx.activity.result.contract.ActivityResultContracts;
 import androidx.annotation.NonNull;
-import androidx.annotation.Nullable;
 import androidx.appcompat.app.AppCompatActivity;
 import androidx.constraintlayout.widget.ConstraintLayout;
 import androidx.lifecycle.ViewModelProvider;
-import androidx.media3.common.MimeTypes;
 import androidx.media3.common.util.UnstableApi;
 
 import android.Manifest;
@@ -58,16 +56,43 @@ import java.util.concurrent.Executors;
         stream = findViewById(R.id.stream);
         stream.setOnClickListener((v)-> {
             InetSocketAddress inetSocketAddress;
-            if (cameraViewModel.isStreaming()) {
+            if (cameraViewModel.stateData.getValue() == CameraViewModel.State.STOPPED) {
+                cameraViewModel.startStream();
+            } else {
                 cameraViewModel.stopStream();
                 inetSocketAddress = null;
-            } else {
-                inetSocketAddress = cameraViewModel.startStream();
             }
-            updateButton(inetSocketAddress);
+        });
+        cameraViewModel.stateData.observe(this, state -> {
+            final String text;
+            final int urlVisibility;
+            final boolean enabled = switch (state) {
+                case STREAMING -> {
+                    text = "Stop";
+                    urlVisibility = View.VISIBLE;
+                    yield true;
+                }
+                case STOPPING -> {
+                    text = "Stopping";
+                    urlVisibility = View.INVISIBLE;
+                    yield false;
+                }
+                case STOPPED -> {
+                    text = "Start";
+                    urlVisibility = View.INVISIBLE;
+                    yield true;
+                }
+                default -> throw new IllegalArgumentException();
+            };
+            stream.setText(text);
+            stream.setEnabled(enabled);
+            InetSocketAddress inetSocketAddress = cameraViewModel.getInetSocketAddress();
+            if (inetSocketAddress != null) {
+                url.setText("http://" + inetSocketAddress.getAddress().getHostAddress() + ":" + inetSocketAddress.getPort());
+            }
+            url.setVisibility(urlVisibility);
         });
         url = findViewById(R.id.url);
-        updateButton(null);
         surfaceView = findViewById(R.id.surfaceView);
         surfaceView.getHolder().addCallback(this);
     }
@@ -127,18 +152,6 @@ import java.util.concurrent.Executors;
                 surfaceView.setLayoutParams(lp);
                 surfaceView.setAspectRatio(size.getWidth(), size.getHeight());
             }
-        }
-    }
-
-    @Nullable
-    private void updateButton(InetSocketAddress inetSocketAddress) {
-        String text = cameraViewModel.isStreaming() ? "Stop" : "Stream";
-        stream.setText(text);
-        if (inetSocketAddress != null) {
-            url.setVisibility(View.VISIBLE);
-            url.setText("http:/" + inetSocketAddress);
-        } else {
-            url.setVisibility(View.INVISIBLE);
         }
     }
 }

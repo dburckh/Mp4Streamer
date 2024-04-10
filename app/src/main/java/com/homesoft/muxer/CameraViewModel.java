@@ -46,6 +46,7 @@ import androidx.annotation.OptIn;
 import androidx.annotation.UiThread;
 import androidx.core.content.ContextCompat;
 import androidx.lifecycle.AndroidViewModel;
+import androidx.lifecycle.MutableLiveData;
 import androidx.media3.common.Format;
 import androidx.media3.common.util.UnstableApi;
 import androidx.media3.muxer.Mp4Muxer;
@@ -70,6 +71,7 @@ import java.util.Arrays;
 import java.util.concurrent.Executor;
 
 @UnstableApi public class CameraViewModel extends AndroidViewModel {
+    enum State {STOPPED, STREAMING, STOPPING};
     private static final int ONE_US = 1_000_000;
     private static final int FRAGMENT_DURATION_US = ONE_US;
     /**
@@ -149,6 +151,14 @@ import java.util.concurrent.Executor;
                     if ((info.flags & MediaCodec.BUFFER_FLAG_END_OF_STREAM) > 0) {
                         mMp4Muxer.close();
                         mMp4Muxer = null;
+                        fragmentServer.close();
+                        fragmentServer = null;
+                        mediaCodec.flush(); //I'm hoping this will cause the codec to restart at an I-Frame
+                        jetty.setStopTimeout(1_000L);
+                        jetty.stop();
+                        jetty = null;
+                        stateData.postValue(State.STOPPED);
+                        return;
                     } else {
                         final ByteBuffer byteBuffer = codec.getOutputBuffer(index);
                         final ByteBuffer copy = ByteBuffer.allocateDirect(byteBuffer.remaining());
@@ -157,8 +167,8 @@ import java.util.concurrent.Executor;
                         mMp4Muxer.writeSampleData(trackToken, copy, info);
                         //Log.d(TAG, "writeSampleData() ts=" + info.presentationTimeUs / 1000 + " flags=" + info.flags);
                     }
-                } catch (IOException e) {
-                    throw new RuntimeException(e);
+                } catch (Exception e) {
+                    Log.e(TAG, "onOutputBufferAvailable()", e);
                 }
             }
             codec.releaseOutputBuffer(index, false);
@@ -230,7 +240,7 @@ import java.util.concurrent.Executor;
 
     private MediaFormat mediaFormat;
 
-    private boolean streaming;
+    public final MutableLiveData<State> stateData = new MutableLiveData<>(State.STOPPED);
 
     @Nullable
     private Mp4Muxer mMp4Muxer;
@@ -326,9 +336,8 @@ import java.util.concurrent.Executor;
         return mediaCodec != null;
     }
 
-    @Nullable
-    public InetAddress getInetAddress() {
-        return inetAddress;
+    public InetSocketAddress getInetSocketAddress() {
+        return new InetSocketAddress(inetAddress, 8080);
     }
 
     @UiThread
@@ -421,7 +430,7 @@ import java.util.concurrent.Executor;
 
     }
     private void updateCameraCaptureSession() {
-        updateCameraCaptureSession(isStreaming() ? this.codecSurface : null);
+        updateCameraCaptureSession(stateData.getValue() == State.STREAMING ? this.codecSurface : null);
     }
 
     private void updateCameraCaptureSession(Surface codecSurface) {
@@ -450,10 +459,6 @@ import java.util.concurrent.Executor;
         }
     }
 
-    public boolean isStreaming() {
-        return streaming;
-    }
-
     private Uri getUri(Uri collection, String fileName, String mimeType) throws UnsupportedOperationException {
         ContentResolver resolver = getApplication().getContentResolver();
 
@@ -464,41 +469,34 @@ import java.util.concurrent.Executor;
         return resolver.insert(collection, newMediaValues);
     }
     @UiThread
-    public InetSocketAddress startStream() {
+    public void startStream() {
         if (mediaCodec != null) {
             updateCameraCaptureSession(codecSurface);
-            streaming = true;
             if (inetAddress != null) {
-                InetSocketAddress inetSocketAddress = new InetSocketAddress("192.168.0.143",8080);
                 getWorkHandler().post(()->{
-                    jetty = new Server(inetSocketAddress);
+                    jetty = new Server(getInetSocketAddress());
                     jetty.setHandler(new ServletHandler());
                     try {
                         jetty.start();
+                        stateData.postValue(State.STREAMING);
                     } catch (Exception e) {
                         throw new RuntimeException(e);
                     }
                 });
-                return inetSocketAddress;
+
             }
         }
-        return null;
     }
 
-    @OptIn(markerClass = UnstableApi.class) @UiThread
+    @OptIn(markerClass = UnstableApi.class)
+    @UiThread
     public void stopStream() {
         if (mediaCodec != null) {
             updateCameraCaptureSession(null);
-            mediaCodec.signalEndOfInputStream();
-            streaming = false;
-//            if (jetty != null) {
-//                try {
-//                    jetty.stop();
-//                    jetty = null;
-//                } catch (Exception e) {
-//                    throw new RuntimeException(e);
-//                }
-//            }
+            if (jetty != null) {
+                stateData.postValue(State.STOPPING);
+                mediaCodec.signalEndOfInputStream();
+            }
         }
     }
 
