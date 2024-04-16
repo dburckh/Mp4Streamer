@@ -10,6 +10,10 @@ import java.nio.channels.GatheringByteChannel;
 
 import kotlin.NotImplementedError;
 
+/**
+ * Mp4 Fragment Server
+ * Holds the stream header(ftyp+moov) and the latest movie fragment (moof)
+ */
 public class FragmentServer implements GatheringByteChannel {
     private static final String TAG = FragmentServer.class.getSimpleName();
 
@@ -22,6 +26,14 @@ public class FragmentServer implements GatheringByteChannel {
         throw new NotImplementedError();
     }
 
+    /**
+     * This is a little hacky, the FragmentedMp4Writer always writes data in chunks
+     * The first chuck is the ftyp+moov and all subsequent chunks are moof.
+     * @param srcs
+     *         The buffers from which bytes are to be retrieved
+     *
+     * @return the number of bytes written
+     */
     @Override
     public long write(ByteBuffer[] srcs) throws ClosedChannelException {
         if (!isOpen()) {
@@ -72,7 +84,7 @@ public class FragmentServer implements GatheringByteChannel {
     }
 
     /**
-     * Return the common MP4 header (FTYP + MOOV)
+     * Return the common MP4 header (ftyp + moov)
      */
     public synchronized ByteBuffer getHeader() throws ClosedChannelException, InterruptedException {
         if (header == null) {

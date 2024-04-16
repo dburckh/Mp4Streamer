@@ -65,7 +65,6 @@ import java.nio.channels.WritableByteChannel;
  *       file may still have some partial data.
  * </ul>
  */
-@UnstableApi
 public final class Mp4Muxer {
   /** A token representing an added track. */
   public interface TrackToken {}

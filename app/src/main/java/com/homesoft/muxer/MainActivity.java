@@ -30,9 +30,8 @@ import java.util.concurrent.Executors;
     private static final String TAG = MainActivity.class.getSimpleName();
     private AutoFixSurfaceView surfaceView;
 
-    private Button stream;
-
     private TextView url;
+    private TextView clients;
 
     private CameraViewModel cameraViewModel;
 
@@ -53,46 +52,28 @@ import java.util.concurrent.Executors;
         super.onCreate(savedInstanceState);
         setContentView(R.layout.activity_main);
         cameraViewModel = new ViewModelProvider.AndroidViewModelFactory(getApplication()).create(CameraViewModel.class);
-        stream = findViewById(R.id.stream);
-        stream.setOnClickListener((v)-> {
-            InetSocketAddress inetSocketAddress;
-            if (cameraViewModel.stateData.getValue() == CameraViewModel.State.STOPPED) {
-                cameraViewModel.startStream();
-            } else {
-                cameraViewModel.stopStream();
-                inetSocketAddress = null;
-            }
-        });
-        cameraViewModel.stateData.observe(this, state -> {
-            final String text;
-            final int urlVisibility;
-            final boolean enabled = switch (state) {
-                case STREAMING -> {
-                    text = "Stop";
-                    urlVisibility = View.VISIBLE;
-                    yield true;
-                }
-                case STOPPING -> {
-                    text = "Stopping";
-                    urlVisibility = View.INVISIBLE;
-                    yield false;
-                }
-                case STOPPED -> {
-                    text = "Start";
-                    urlVisibility = View.INVISIBLE;
-                    yield true;
-                }
-                default -> throw new IllegalArgumentException();
-            };
-            stream.setText(text);
-            stream.setEnabled(enabled);
-            InetSocketAddress inetSocketAddress = cameraViewModel.getInetSocketAddress();
-            if (inetSocketAddress != null) {
-                url.setText("http://" + inetSocketAddress.getAddress().getHostAddress() + ":" + inetSocketAddress.getPort());
-            }
-            url.setVisibility(urlVisibility);
-        });
         url = findViewById(R.id.url);
+        clients = findViewById(R.id.clients);
+
+        cameraViewModel.inetSocketAddressData.observe(this, inetSocketAddress -> {
+            final String text;
+            if (inetSocketAddress == null) {
+                text = getString(R.string.noWiFi);
+            } else {
+                text = "http://" + inetSocketAddress.getAddress().getHostAddress() + ":" + inetSocketAddress.getPort();
+            }
+            url.setText(text);
+        });
+
+        cameraViewModel.connectionData.observe(this, connections -> {
+            final String text;
+            if (connections < 0) {
+                text = getString(R.string.idle);
+            } else {
+                text = connections.toString();
+            }
+            clients.setText(text);
+        });
         surfaceView = findViewById(R.id.surfaceView);
         surfaceView.getHolder().addCallback(this);
     }

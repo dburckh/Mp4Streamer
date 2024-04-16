@@ -7,6 +7,7 @@ import android.media.MediaCodec;
 import android.media.MediaFormat;
 import android.media.MediaParser;
 import android.net.Uri;
+import android.os.Build;
 import android.os.ParcelFileDescriptor;
 import android.provider.MediaStore;
 import android.util.Log;
@@ -14,6 +15,7 @@ import android.util.Log;
 import androidx.annotation.NonNull;
 import androidx.annotation.Nullable;
 import androidx.annotation.OptIn;
+import androidx.annotation.RequiresApi;
 import androidx.media3.common.Format;
 import androidx.media3.common.MimeTypes;
 import androidx.media3.common.util.UnstableApi;
@@ -28,6 +30,7 @@ import java.util.Arrays;
 import java.util.HashMap;
 import java.util.List;
 
+@RequiresApi(Build.VERSION_CODES.R)
 public class Remuxer implements MediaParser.OutputConsumer, Runnable {
     private static final int MAX_B_FRAMES = 4;
     private static final String TAG = Remuxer.class.getSimpleName();
@@ -86,43 +89,9 @@ public class Remuxer implements MediaParser.OutputConsumer, Runnable {
 
     }
 
-    private static void appendByteBuffer(ByteBuffer csd, List<byte[]> list) {
-        if (csd != null) {
-            byte[] buffer = new byte[csd.limit()];
-            csd.rewind();
-            csd.get(buffer);
-            list.add(buffer);
-        }
-    }
-
-    @OptIn(markerClass = UnstableApi.class)
-    public static Format getFormat(MediaFormat mediaFormat) {
-        final String mimeType = mediaFormat.getString(MediaFormat.KEY_MIME);
-        final Format.Builder builder = new Format.Builder().setSampleMimeType(mimeType);
-        if (mimeType.startsWith(MimeTypes.BASE_TYPE_VIDEO)) {
-            builder.setWidth(mediaFormat.getInteger(MediaFormat.KEY_WIDTH))
-                    .setHeight(mediaFormat.getInteger(MediaFormat.KEY_HEIGHT));
-            if (mediaFormat.containsKey(MediaFormat.KEY_ROTATION)) {
-                builder.setRotationDegrees(mediaFormat.getInteger(MediaFormat.KEY_ROTATION));
-            }
-        } else if (mimeType.startsWith(MimeTypes.BASE_TYPE_AUDIO)) {
-            builder.setChannelCount(mediaFormat.getInteger(MediaFormat.KEY_CHANNEL_COUNT))
-                    .setSampleRate(mediaFormat.getInteger(MediaFormat.KEY_SAMPLE_RATE));
-        } else {
-            Log.d(TAG, "Unknown mimeType: " + mimeType + " " + mediaFormat);
-        }
-        final ArrayList<byte[]> csdList = new ArrayList<>(2);
-        ByteBuffer csd0 = mediaFormat.getByteBuffer("csd-0");
-        appendByteBuffer(csd0, csdList);
-        ByteBuffer csd1 = mediaFormat.getByteBuffer("csd-1");
-        appendByteBuffer(csd1, csdList);
-        builder.setInitializationData(csdList);
-        return builder.build();
-    }
-
     @OptIn(markerClass = UnstableApi.class) @Override
     public void onTrackDataFound(int trackIndex, @NonNull MediaParser.TrackData trackData) {
-        final Format format = getFormat(trackData.mediaFormat);
+        final Format format = CameraViewModel.getFormat(trackData.mediaFormat);
         mMp4Muxer.setOrientation(format.rotationDegrees);
 
         final Mp4Muxer.TrackToken trackToken = mMp4Muxer.addTrack(trackIndex, format);
@@ -195,5 +164,16 @@ public class Remuxer implements MediaParser.OutputConsumer, Runnable {
                 throw new RuntimeException(e);
             }
         }
+    }
+
+    private static Uri getUri(Context context, Uri collection, String fileName, String mimeType)
+            throws UnsupportedOperationException {
+        ContentResolver resolver = context.getContentResolver();
+
+        ContentValues newMediaValues = new ContentValues();
+        newMediaValues.put(MediaStore.MediaColumns.DISPLAY_NAME, fileName);
+        newMediaValues.put(MediaStore.MediaColumns.MIME_TYPE, mimeType);
+
+        return resolver.insert(collection, newMediaValues);
     }
 }
