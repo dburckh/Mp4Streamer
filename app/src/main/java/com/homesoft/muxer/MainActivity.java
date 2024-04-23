@@ -76,6 +76,7 @@ import java.util.concurrent.Executors;
         });
         surfaceView = findViewById(R.id.surfaceView);
         surfaceView.getHolder().addCallback(this);
+        surfaceView.setKeepScreenOn(true);
     }
 
     @Override

@@ -446,7 +446,7 @@ import java.util.concurrent.atomic.AtomicInteger;
         @Override
         public void handle(String target, Request baseRequest, HttpServletRequest request, HttpServletResponse response) throws IOException {
             final int seq = sequence.getAndIncrement();
-            Log.d(TAG, "Got connection: " + seq);
+            Log.d(TAG, "handle() Got connection: " + seq);
             if (surfaceEncoder == null ||
                     surfaceEncoder.getState() == SurfaceEncoder.State.RELEASED ||
                     cameraDevice == null || surfaceHolder == null) {
@@ -470,14 +470,15 @@ import java.util.concurrent.atomic.AtomicInteger;
                         }
                     }
                     try {
-                        Log.d(TAG, "Waiting for server start...");
+                        //Log.d(TAG, "handle() Waiting for server start... " + seq);
                         streamSemaphore.acquire();
+                        //Log.d(TAG, "handle() Server Started: " + seq);
                     } catch (InterruptedException e) {
-                        Log.e(TAG, "Waiting for server start", e);
+                        Log.e(TAG, "handle() Waiting for server start", e);
+                        return;
                     }
-                    return;
                 } else {
-                    Log.e(TAG, "Too many sessions");
+                    Log.e(TAG, "handle() Too many sessions: " + seq);
                     // We are overrun
                     response.setStatus(HttpServletResponse.SC_SERVICE_UNAVAILABLE);
                     response.setHeader(HttpHeaders.RETRY_AFTER, "60");
@@ -492,12 +493,13 @@ import java.util.concurrent.atomic.AtomicInteger;
                 ByteBuffer byteBuffer = null;
                 while (true) {
                     byteBuffer = fragmentServer.getFragment(byteBuffer);
-                    Log.d(TAG, "Sending " + byteBuffer.remaining());
+                    //Log.d(TAG, "Sending " + byteBuffer.remaining());
                     out.write(byteBuffer.array());
                     out.flush();
                 }
-            } catch (InterruptedException | ClosedChannelException e) {
+            } catch (Exception e) {
                 // Just ignore this, it's normal
+                //Log.d(TAG, "handle() exception", e);
             } finally {
                 streamSemaphore.release();
                 connectionData.postValue(MAX_CLIENTS - streamSemaphore.availablePermits());
@@ -505,7 +507,7 @@ import java.util.concurrent.atomic.AtomicInteger;
                 workHandler.removeCallbacks(idleCheck);
                 workHandler.postDelayed(idleCheck, MEDIA_CODEC_IDLE_MS);
             }
-            Log.d(TAG, "Closed: " + seq);
+            Log.d(TAG, "handle() Closed: " + seq);
         }
     }
 }

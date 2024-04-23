@@ -81,6 +81,7 @@ public class SurfaceEncoder extends MediaCodec.Callback {
                 if ((info.flags & MediaCodec.BUFFER_FLAG_END_OF_STREAM) > 0) {
                     mediaCodec.stop();
                     listener.onShutdown();
+                    state = State.IDLE;
                     return;
                 } else {
                     listener.onBuffer(codec.getOutputBuffer(index), info);
