@@ -124,10 +124,10 @@ public class FragmentServer implements GatheringByteChannel {
         synchronized (this) {
             if (header == null) {
                 header = out;
-                Log.d(TAG, "Stored moov: " + header);
+                //Log.d(TAG, "Stored moov: " + header);
             } else {
                 lastMoof = out;
-                Log.d(TAG, "Stored moof" + lastMoof);
+                //Log.d(TAG, "Stored moof" + lastMoof);
             }
             notifyAll();
         }
