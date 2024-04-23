@@ -86,18 +86,6 @@ import java.util.concurrent.atomic.AtomicInteger;
 
     private static final int MAX_CLIENTS = 4;
 
-    /**
-     * Conversion from screen rotation to JPEG orientation.
-     */
-    private static final SparseIntArray ORIENTATIONS = new SparseIntArray();
-
-    static {
-        ORIENTATIONS.append(Surface.ROTATION_0, 0);
-        ORIENTATIONS.append(Surface.ROTATION_90, 90);
-        ORIENTATIONS.append(Surface.ROTATION_180, 180);
-        ORIENTATIONS.append(Surface.ROTATION_270, 270);
-    }
-
     private static final String TAG = CameraViewModel.class.getSimpleName();
 
     private static int getPixels(Size size) {
@@ -318,26 +306,12 @@ import java.util.concurrent.atomic.AtomicInteger;
         return workHandler;
     }
 
-    @Nullable
-    public Size getDisplaySize(Activity activity) {
-        int deviceOrientation = activity.getWindowManager().getDefaultDisplay().getRotation();
+    public Size getImageSize() {
+        return imageSize;
+    }
 
-        // Get device orientation in degrees
-        // We use front camera, so negate
-        int deviceRotation = -ORIENTATIONS.get(deviceOrientation);
-
-
-        // Calculate desired JPEG orientation relative to camera orientation to make
-        // the image upright relative to the device orientation
-        int rotation = (sensorRotation + deviceRotation + 360) % 360;
-        if (imageSize != null) {
-            if (rotation == 90 || rotation == 270) {
-                return new Size(imageSize.getHeight(), imageSize.getWidth());
-            } else {
-                return imageSize;
-            }
-        }
-        return null;
+    public int getSensorRotation() {
+        return sensorRotation;
     }
 
     private void configureCamera(@NonNull CameraDevice cameraDevice,
