@@ -91,7 +91,7 @@ public class Remuxer implements MediaParser.OutputConsumer, Runnable {
 
     @OptIn(markerClass = UnstableApi.class) @Override
     public void onTrackDataFound(int trackIndex, @NonNull MediaParser.TrackData trackData) {
-        final Format format = CameraViewModel.getFormat(trackData.mediaFormat);
+        final Format format = FragmentServer.getFormat(trackData.mediaFormat);
         mMp4Muxer.setOrientation(format.rotationDegrees);
 
         final Mp4Muxer.TrackToken trackToken = mMp4Muxer.addTrack(trackIndex, format);

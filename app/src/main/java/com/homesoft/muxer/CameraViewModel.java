@@ -1,5 +1,7 @@
 package com.homesoft.muxer;
 
+import static com.homesoft.muxer.FragmentServer.ONE_US;
+
 import android.Manifest;
 import android.annotation.SuppressLint;
 import android.app.Activity;
@@ -17,7 +19,6 @@ import android.hardware.camera2.params.OutputConfiguration;
 import android.hardware.camera2.params.SessionConfiguration;
 import android.hardware.camera2.params.StreamConfigurationMap;
 import android.media.MediaCodec;
-import android.media.MediaCodecInfo;
 import android.media.MediaFormat;
 import android.net.ConnectivityManager;
 import android.net.LinkAddress;
@@ -38,15 +39,11 @@ import android.view.SurfaceHolder;
 
 import androidx.annotation.NonNull;
 import androidx.annotation.Nullable;
-import androidx.annotation.OptIn;
 import androidx.annotation.UiThread;
 import androidx.core.content.ContextCompat;
 import androidx.lifecycle.AndroidViewModel;
 import androidx.lifecycle.MutableLiveData;
-import androidx.media3.common.Format;
-import androidx.media3.common.MimeTypes;
 import androidx.media3.common.util.UnstableApi;
-import androidx.media3.muxer.Mp4Muxer;
 
 import com.google.common.net.HttpHeaders;
 
@@ -66,56 +63,20 @@ import java.nio.ByteBuffer;
 import java.nio.channels.ClosedChannelException;
 import java.util.ArrayList;
 import java.util.Arrays;
-import java.util.List;
 import java.util.concurrent.Executor;
 import java.util.concurrent.Semaphore;
+import java.util.concurrent.atomic.AtomicInteger;
 
-@UnstableApi public class CameraViewModel extends AndroidViewModel {
+@UnstableApi public class CameraViewModel extends AndroidViewModel implements SurfaceEncoder.Listener {
     /**
      * Connection value indicating that MediaCodec is shutdown and needs to be restarted
      */
     public static final int MEDIA_CODEC_SHUTDOWN = -1;
 
-    public static Format getFormat(MediaFormat mediaFormat) {
-        final String mimeType = mediaFormat.getString(MediaFormat.KEY_MIME);
-        final Format.Builder builder = new Format.Builder().setSampleMimeType(mimeType);
-        if (mimeType.startsWith(MimeTypes.BASE_TYPE_VIDEO)) {
-            builder.setWidth(mediaFormat.getInteger(MediaFormat.KEY_WIDTH))
-                    .setHeight(mediaFormat.getInteger(MediaFormat.KEY_HEIGHT));
-            if (mediaFormat.containsKey(MediaFormat.KEY_ROTATION)) {
-                builder.setRotationDegrees(mediaFormat.getInteger(MediaFormat.KEY_ROTATION));
-            }
-        } else if (mimeType.startsWith(MimeTypes.BASE_TYPE_AUDIO)) {
-            builder.setChannelCount(mediaFormat.getInteger(MediaFormat.KEY_CHANNEL_COUNT))
-                    .setSampleRate(mediaFormat.getInteger(MediaFormat.KEY_SAMPLE_RATE));
-        } else {
-            Log.d(TAG, "Unknown mimeType: " + mimeType + " " + mediaFormat);
-        }
-        final ArrayList<byte[]> csdList = new ArrayList<>(2);
-        ByteBuffer csd0 = mediaFormat.getByteBuffer("csd-0");
-        appendByteBuffer(csd0, csdList);
-        ByteBuffer csd1 = mediaFormat.getByteBuffer("csd-1");
-        appendByteBuffer(csd1, csdList);
-        builder.setInitializationData(csdList);
-        return builder.build();
-    }
-
-    private static void appendByteBuffer(ByteBuffer csd, List<byte[]> list) {
-        if (csd != null) {
-            byte[] buffer = new byte[csd.limit()];
-            csd.rewind();
-            csd.get(buffer);
-            list.add(buffer);
-        }
-    }
     /**
      * How long we let MediaCodec idle before we shut it down
      */
     private static final long MEDIA_CODEC_IDLE_MS = 1000L;
-    /**
-     * Microseconds in a second
-     */
-    private static final int ONE_US = 1_000_000;
     /**
      * Fragment duration.  Directly impacts video lag.
      * Values < 1 second will greatly reduce compressions
@@ -145,7 +106,7 @@ import java.util.concurrent.Semaphore;
 
     /**
      * Number of active connections
-     * @see {@link CameraViewModel@MEDIA_CODEC_SHUTDOWN}
+     * or {@link CameraViewModel#MEDIA_CODEC_SHUTDOWN} if shutdown
      */
     public final MutableLiveData<Integer> connectionData = new MutableLiveData<>(MEDIA_CODEC_SHUTDOWN);
 
@@ -163,24 +124,18 @@ import java.util.concurrent.Semaphore;
 
     private final Semaphore streamSemaphore = new Semaphore(0);
 
-    /**
-     * Indicates that the MediaCodec is in the process of shutting down
-     */
-    private volatile boolean mediaCodecShutdown = false;
-
     private final CameraDevice.StateCallback cameraStateCallback = new CameraDevice.StateCallback() {
         @Override
         public void onOpened(@NonNull CameraDevice camera) {
             cameraDevice = camera;
-            if (surfaceHolder != null && codecSurface != null) {
-                configureCamera(cameraDevice, surfaceHolder, codecSurface);
+            if (surfaceHolder != null) {
+                configureCamera(cameraDevice, surfaceHolder, null);
             }
         }
 
         @Override
         public void onDisconnected(@NonNull CameraDevice camera) {
             cameraDevice = null;
-            cameraCaptureSession = null;
         }
 
         @Override
@@ -237,67 +192,6 @@ import java.util.concurrent.Semaphore;
         }
     };
 
-    private final MediaCodec.Callback mediaCodecCallback = new MediaCodec.Callback() {
-        @Override
-        public void onInputBufferAvailable(@NonNull MediaCodec codec, int index) {
-            // Should not get called
-        }
-
-        @Override
-        public void onOutputBufferAvailable(@NonNull MediaCodec codec, int index, @NonNull MediaCodec.BufferInfo info) {
-
-            if ((info.flags & MediaCodec.BUFFER_FLAG_CODEC_CONFIG) == 0) {
-                try {
-                    if ((info.flags & MediaCodec.BUFFER_FLAG_END_OF_STREAM) > 0) {
-                        // Got end of stream, shutdown MediaCodec/Muxer
-                        mMp4Muxer.close();
-                        mMp4Muxer = null;
-                        fragmentServer.close();
-                        fragmentServer = null;
-                        updateCameraCaptureSession(null);
-                        codecSurface.release();
-                        codecSurface = null;
-                        mediaCodec.stop();
-                        restartMediaCodec();
-                        configureCamera(cameraDevice, surfaceHolder, codecSurface);
-                        mediaCodecShutdown = false;
-                        return;
-                    } else {
-                        final ByteBuffer byteBuffer = codec.getOutputBuffer(index);
-                        final ByteBuffer copy = ByteBuffer.allocateDirect(byteBuffer.remaining());
-                        copy.put(byteBuffer);
-                        copy.flip();
-                        mMp4Muxer.writeSampleData(trackToken, copy, info);
-                        //Log.d(TAG, "writeSampleData() ts=" + info.presentationTimeUs / 1000 + " flags=" + info.flags);
-                    }
-                } catch (Exception e) {
-                    Log.e(TAG, "onOutputBufferAvailable()", e);
-                }
-            }
-            codec.releaseOutputBuffer(index, false);
-        }
-
-        @Override
-        public void onError(@NonNull MediaCodec codec, @NonNull MediaCodec.CodecException e) {
-            Log.e(TAG, "MediaCodec Error", e);
-        }
-
-        @OptIn(markerClass = UnstableApi.class) @Override
-        public void onOutputFormatChanged(@NonNull MediaCodec codec, @NonNull MediaFormat mediaFormat) {
-            // Hack to deal with in-exact key frame rates
-            int fragmentDurationUs = FRAGMENT_DURATION_US >= ONE_US ? (FRAGMENT_DURATION_US - ONE_US / 4) : FRAGMENT_DURATION_US;
-            mMp4Muxer = new Mp4Muxer.Builder(fragmentServer = new FragmentServer())
-                    .setFragmentedMp4Enabled(true)
-                    .setFragmentDurationUs(fragmentDurationUs)
-                    .build();
-            final Format format = getFormat(mediaFormat);
-            mMp4Muxer.setOrientation(sensorRotation);
-
-            trackToken = mMp4Muxer.addTrack(0, format);
-            streamSemaphore.release(4);
-        }
-    };
-
     final Runnable idleCheck = new Runnable() {
         @Override
         public void run() {
@@ -305,8 +199,9 @@ import java.util.concurrent.Semaphore;
                 // If we have no clients, initiate a shutdown of MediaCodec/Muxer
                 streamSemaphore.drainPermits();
                 connectionData.postValue(MEDIA_CODEC_SHUTDOWN);
-                mediaCodecShutdown = true;
-                mediaCodec.signalEndOfInputStream();
+                if (surfaceEncoder != null) {
+                    surfaceEncoder.shutdown();
+                }
             }
         }
     };
@@ -322,28 +217,18 @@ import java.util.concurrent.Semaphore;
     private Handler workHandler;
 
     @Nullable
-    private Surface codecSurface;
-
-    @Nullable
     private CameraDevice cameraDevice;
 
     CameraCaptureSession.StateCallback configureCallback;
-    @Nullable
-    private CameraCaptureSession cameraCaptureSession;
 
     private Size imageSize;
     private int sensorRotation;
     private Range<Integer> selectedFps;
 
     @Nullable
-    private MediaCodec mediaCodec;
-
-    private MediaFormat mediaFormat;
+    private SurfaceEncoder surfaceEncoder;
 
     @Nullable
-    private Mp4Muxer mMp4Muxer;
-    private Mp4Muxer.TrackToken trackToken;
-
     private FragmentServer fragmentServer;
 
     private Server jetty;
@@ -357,13 +242,6 @@ import java.util.concurrent.Semaphore;
 
     public boolean hasCameraPermission() {
         return ContextCompat.checkSelfPermission(getApplication(), Manifest.permission.CAMERA) == PackageManager.PERMISSION_GRANTED;
-    }
-
-    private void restartMediaCodec() {
-        mediaCodec.setCallback(mediaCodecCallback, getWorkHandler());
-        mediaCodec.configure(mediaFormat, null, null, MediaCodec.CONFIGURE_FLAG_ENCODE);
-        codecSurface = mediaCodec.createInputSurface();
-        mediaCodec.start();
     }
 
     /**
@@ -414,17 +292,10 @@ import java.util.concurrent.Semaphore;
                         }
 
                         try {
-                            mediaCodec = MediaCodec.createEncoderByType(MediaFormat.MIMETYPE_VIDEO_AVC);
-                            mediaFormat = MediaFormat.createVideoFormat(MediaFormat.MIMETYPE_VIDEO_AVC, imageSize.getWidth(), imageSize.getHeight());
-                            mediaFormat.setFloat(MediaFormat.KEY_FRAME_RATE, selectedFps.getLower());
-                            mediaFormat.setInteger(MediaFormat.KEY_COLOR_FORMAT, MediaCodecInfo.CodecCapabilities.COLOR_FormatSurface);
-                            int pixelsPerSecond = selectedFps.getUpper() * imageSize.getWidth() * imageSize.getHeight();
-                            //Try 1/8 or 12.5%
-                            mediaFormat.setInteger(MediaFormat.KEY_BIT_RATE, (pixelsPerSecond / 8));
-                            mediaFormat.setInteger(MediaFormat.KEY_I_FRAME_INTERVAL, FRAGMENT_DURATION_US / ONE_US);
-                            restartMediaCodec();
+                            surfaceEncoder = new SurfaceEncoder(imageSize.getWidth(), imageSize.getHeight(), selectedFps.getUpper(),
+                                    FRAGMENT_DURATION_US / ONE_US, this);
                         } catch (IOException e) {
-                            Log.e(TAG, "createEncoderByType()");
+                            Log.e(TAG, "failed to create SurfaceMuxer", e);
                         }
                         cameraManager.openCamera(id, cameraStateCallback, mainHandler);
                         break;
@@ -435,7 +306,7 @@ import java.util.concurrent.Semaphore;
                 Log.e(TAG, "Debug", e);
             }
         }
-        return mediaCodec != null;
+        return surfaceEncoder != null;
     }
 
     @NonNull
@@ -471,24 +342,37 @@ import java.util.concurrent.Semaphore;
 
     private void configureCamera(@NonNull CameraDevice cameraDevice,
                                  @NonNull SurfaceHolder surfaceHolder,
-                                 @NonNull Surface codecSurface) {
+                                 @Nullable Surface codecSurface) {
         try {
             configureCallback = new CameraCaptureSession.StateCallback() {
                 @Override
                 public void onConfigured(@NonNull CameraCaptureSession session) {
-                    cameraCaptureSession = session;
-                    updateCameraCaptureSession();
+                    try {
+                        CaptureRequest.Builder builder = cameraDevice
+                                .createCaptureRequest(CameraDevice.TEMPLATE_PREVIEW);
+                        builder.set(CaptureRequest.CONTROL_AE_TARGET_FPS_RANGE, selectedFps);
+                        builder.addTarget(surfaceHolder.getSurface());
+                        if (codecSurface != null) {
+                            builder.addTarget(codecSurface);
+                        }
+
+                        session.setRepeatingRequest(builder.build(), null, null);
+
+                    } catch (CameraAccessException e) {
+                        Log.e(TAG, "onConfigured()", e);
+                    }
                 }
 
                 @Override
                 public void onConfigureFailed(@NonNull CameraCaptureSession session) {
-                    cameraCaptureSession = null;
                     // TODO: Handle
                 }
             };
             ArrayList<Surface> surfaceList = new ArrayList<>(2);
             surfaceList.add(surfaceHolder.getSurface());
-            surfaceList.add(codecSurface);
+            if (codecSurface != null) {
+                surfaceList.add(codecSurface);
+            }
             if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.P) {
                 final ArrayList<OutputConfiguration> outputList = new ArrayList<>(surfaceList.size());
                 for (Surface surface : surfaceList) {
@@ -516,81 +400,92 @@ import java.util.concurrent.Semaphore;
     public void setSurfaceHolder(@Nullable SurfaceHolder surfaceHolder) {
         if (this.surfaceHolder != surfaceHolder) {
             this.surfaceHolder = surfaceHolder;
-            if (configureCallback == null) {
-                if (cameraDevice != null && codecSurface != null && surfaceHolder != null) {
-                    configureCamera(cameraDevice, surfaceHolder, codecSurface);
-                }
-            } else {
-                updateCameraCaptureSession();
-            }
-        }
-
-
-    }
-    private void updateCameraCaptureSession() {
-        updateCameraCaptureSession(streamSemaphore.availablePermits() > 0 ? this.codecSurface : null);
-    }
-
-    private void updateCameraCaptureSession(Surface codecSurface) {
-        if (cameraCaptureSession != null) {
-            Surface previewSurface = surfaceHolder == null ? null : surfaceHolder.getSurface();
-            if (previewSurface == null && codecSurface == null) {
-                cameraCaptureSession.close();
-                cameraCaptureSession = null;
-                configureCallback = null;
-            }
-            try {
-                CaptureRequest.Builder builder = cameraCaptureSession.getDevice()
-                        .createCaptureRequest(CameraDevice.TEMPLATE_PREVIEW);
-                builder.set(CaptureRequest.CONTROL_AE_TARGET_FPS_RANGE, selectedFps);
-                if (previewSurface != null) {
-                    builder.addTarget(previewSurface);
-                }
-                if (codecSurface != null) {
-                    builder.addTarget(codecSurface);
-                }
-                cameraCaptureSession.setRepeatingRequest(builder.build(), null, null);
-
-            } catch (CameraAccessException e) {
-                Log.e(TAG, "onConfigured()", e);
+            if (cameraDevice != null && surfaceHolder != null) {
+                configureCamera(cameraDevice, surfaceHolder, null);
             }
         }
     }
+
 
     @Override
     protected void onCleared() {
         super.onCleared();
-        if (mediaCodec != null) {
-            mediaCodec.release();
+        if (surfaceEncoder != null) {
+            surfaceEncoder.release();
         }
         connectivityManager.unregisterNetworkCallback(networkCallback);
     }
 
+    @Override
+    public void onShutdown() {
+        if (fragmentServer != null) {
+            fragmentServer.close();
+            fragmentServer = null;
+        }
+    }
+
+    @Override
+    public void onReady(MediaFormat mediaFormat) {
+        fragmentServer = new FragmentServer(mediaFormat, sensorRotation, FRAGMENT_DURATION_US);
+        streamSemaphore.release(4);
+    }
+
+    @Override
+    public void onBuffer(ByteBuffer byteBuffer, @NonNull MediaCodec.BufferInfo info) {
+        if (fragmentServer != null) {
+            try {
+                fragmentServer.onBuffer(byteBuffer, info);
+            } catch (IOException e) {
+                Log.wtf(TAG, "Failed to write buffer", e);
+            }
+        }
+    }
+
     class ServletHandler extends AbstractHandler {
+        private AtomicInteger sequence = new AtomicInteger(0);
         @Override
         public void handle(String target, Request baseRequest, HttpServletRequest request, HttpServletResponse response) throws IOException {
-            response.setHeader("content-type", "video/mp4");
+            final int seq = sequence.getAndIncrement();
+            Log.d(TAG, "Got connection: " + seq);
+            if (surfaceEncoder == null ||
+                    surfaceEncoder.getState() == SurfaceEncoder.State.RELEASED ||
+                    cameraDevice == null || surfaceHolder == null) {
+                response.setStatus(HttpServletResponse.SC_INTERNAL_SERVER_ERROR);
+                Log.w(TAG, "handle() encoder not ready");
+                return;
+            }
 
             if (!streamSemaphore.tryAcquire()) {
-                if (mediaCodecShutdown) {
-                    Log.e(TAG, "Connection while in middle of shutdown");
-                    response.setStatus(HttpServletResponse.SC_SERVICE_UNAVAILABLE);
-                    response.setHeader(HttpHeaders.RETRY_AFTER, "1");
-                    return;
-                } else if (fragmentServer != null) {
-                    // We are overrun
-                    response.setStatus(HttpServletResponse.SC_SERVICE_UNAVAILABLE);
-                    response.setHeader(HttpHeaders.RETRY_AFTER, "60");
-                    return;
-                } else {
-                    updateCameraCaptureSession(codecSurface);
+                if (fragmentServer == null) {
+                    switch (surfaceEncoder.getState()) {
+                        case IDLE -> {
+                            Surface surface = surfaceEncoder.startMediaCodec(workHandler);
+                            configureCamera(cameraDevice, surfaceHolder, surface);
+                        }
+                        case STOPPING -> {
+                            // Edge case where where a client connects while we are shutting down
+                            response.setStatus(HttpServletResponse.SC_SERVICE_UNAVAILABLE);
+                            response.setHeader(HttpHeaders.RETRY_AFTER, "1");
+                            return;
+                        }
+                    }
                     try {
+                        Log.d(TAG, "Waiting for server start...");
                         streamSemaphore.acquire();
                     } catch (InterruptedException e) {
                         Log.e(TAG, "Waiting for server start", e);
                     }
+                    return;
+                } else {
+                    Log.e(TAG, "Too many sessions");
+                    // We are overrun
+                    response.setStatus(HttpServletResponse.SC_SERVICE_UNAVAILABLE);
+                    response.setHeader(HttpHeaders.RETRY_AFTER, "60");
+                    return;
                 }
             }
+            response.setHeader("content-type", "video/mp4");
+
             connectionData.postValue(MAX_CLIENTS - streamSemaphore.availablePermits());
             try (OutputStream out = response.getOutputStream()){
                 out.write(fragmentServer.getHeader().array());
@@ -610,7 +505,7 @@ import java.util.concurrent.Semaphore;
                 workHandler.removeCallbacks(idleCheck);
                 workHandler.postDelayed(idleCheck, MEDIA_CODEC_IDLE_MS);
             }
-            Log.d(TAG, "Closed");
+            Log.d(TAG, "Closed: " + seq);
         }
     }
 }
