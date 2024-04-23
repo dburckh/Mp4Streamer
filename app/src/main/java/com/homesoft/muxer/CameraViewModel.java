@@ -416,7 +416,7 @@ import java.util.concurrent.atomic.AtomicInteger;
     }
 
     class ServletHandler extends AbstractHandler {
-        private AtomicInteger sequence = new AtomicInteger(0);
+        private final AtomicInteger sequence = new AtomicInteger(0);
         @Override
         public void handle(String target, Request baseRequest, HttpServletRequest request, HttpServletResponse response) throws IOException {
             final int seq = sequence.getAndIncrement();

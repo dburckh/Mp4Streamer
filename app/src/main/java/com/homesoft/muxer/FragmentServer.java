@@ -6,8 +6,10 @@ import android.util.Log;
 
 import androidx.annotation.NonNull;
 import androidx.annotation.Nullable;
+import androidx.annotation.OptIn;
 import androidx.media3.common.Format;
 import androidx.media3.common.MimeTypes;
+import androidx.media3.common.util.UnstableApi;
 import androidx.media3.muxer.Mp4Muxer;
 
 import java.io.IOException;
@@ -29,6 +31,7 @@ public class FragmentServer implements GatheringByteChannel {
      */
     public static final int ONE_US = 1_000_000;
 
+    @OptIn(markerClass = UnstableApi.class)
     public static Format getFormat(MediaFormat mediaFormat) {
         final String mimeType = mediaFormat.getString(MediaFormat.KEY_MIME);
         final Format.Builder builder = new Format.Builder().setSampleMimeType(mimeType);
@@ -63,7 +66,7 @@ public class FragmentServer implements GatheringByteChannel {
 
     private static final String TAG = FragmentServer.class.getSimpleName();
 
-    private Mp4Muxer mMp4Muxer;
+    private final Mp4Muxer mp4Muxer;
     private final Mp4Muxer.TrackToken trackToken;
 
     ByteBuffer header;
@@ -72,14 +75,14 @@ public class FragmentServer implements GatheringByteChannel {
 
     public FragmentServer(MediaFormat mediaFormat, int rotation, int fragmentUs) {
         int fragmentDurationUs = fragmentUs >= ONE_US ? (fragmentUs - ONE_US / 4) : fragmentUs;
-        mMp4Muxer = new Mp4Muxer.Builder(this)
+        mp4Muxer = new Mp4Muxer.Builder(this)
                 .setFragmentedMp4Enabled(true)
                 .setFragmentDurationUs(fragmentDurationUs)
                 .build();
         final Format format = getFormat(mediaFormat);
-        mMp4Muxer.setOrientation(rotation);
+        mp4Muxer.setOrientation(rotation);
 
-        trackToken = mMp4Muxer.addTrack(0, format);
+        trackToken = mp4Muxer.addTrack(0, format);
     }
 
     public void onBuffer(ByteBuffer byteBuffer, @NonNull MediaCodec.BufferInfo info) throws IOException {
@@ -88,7 +91,7 @@ public class FragmentServer implements GatheringByteChannel {
         ByteBuffer copy = ByteBuffer.allocateDirect(byteBuffer.remaining());
         copy.put(byteBuffer);
         copy.flip();
-        mMp4Muxer.writeSampleData(trackToken, copy, info);
+        mp4Muxer.writeSampleData(trackToken, copy, info);
     }
 
     @Override
