@@ -48,7 +48,7 @@ import java.util.ArrayList;
     protected void onCreate(Bundle savedInstanceState) {
         super.onCreate(savedInstanceState);
         setContentView(R.layout.activity_main);
-        cameraViewModel = new ViewModelProvider.AndroidViewModelFactory(getApplication()).create(CameraViewModel.class);
+        cameraViewModel = new ViewModelProvider(this).get(CameraViewModel.class);
         url = findViewById(R.id.url);
         clients = findViewById(R.id.clients);
 
