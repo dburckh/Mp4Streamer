@@ -86,18 +86,6 @@ import java.util.concurrent.atomic.AtomicInteger;
 
     private static final int MAX_CLIENTS = 4;
 
-    /**
-     * Conversion from screen rotation to JPEG orientation.
-     */
-    private static final SparseIntArray ORIENTATIONS = new SparseIntArray();
-
-    static {
-        ORIENTATIONS.append(Surface.ROTATION_0, 0);
-        ORIENTATIONS.append(Surface.ROTATION_90, 90);
-        ORIENTATIONS.append(Surface.ROTATION_180, 180);
-        ORIENTATIONS.append(Surface.ROTATION_270, 270);
-    }
-
     private static final String TAG = CameraViewModel.class.getSimpleName();
 
     private static int getPixels(Size size) {
@@ -318,26 +306,12 @@ import java.util.concurrent.atomic.AtomicInteger;
         return workHandler;
     }
 
-    @Nullable
-    public Size getDisplaySize(Activity activity) {
-        int deviceOrientation = activity.getWindowManager().getDefaultDisplay().getRotation();
+    public Size getImageSize() {
+        return imageSize;
+    }
 
-        // Get device orientation in degrees
-        // We use front camera, so negate
-        int deviceRotation = -ORIENTATIONS.get(deviceOrientation);
-
-
-        // Calculate desired JPEG orientation relative to camera orientation to make
-        // the image upright relative to the device orientation
-        int rotation = (sensorRotation + deviceRotation + 360) % 360;
-        if (imageSize != null) {
-            if (rotation == 90 || rotation == 270) {
-                return new Size(imageSize.getHeight(), imageSize.getWidth());
-            } else {
-                return imageSize;
-            }
-        }
-        return null;
+    public int getSensorRotation() {
+        return sensorRotation;
     }
 
     private void configureCamera(@NonNull CameraDevice cameraDevice,
@@ -442,11 +416,11 @@ import java.util.concurrent.atomic.AtomicInteger;
     }
 
     class ServletHandler extends AbstractHandler {
-        private AtomicInteger sequence = new AtomicInteger(0);
+        private final AtomicInteger sequence = new AtomicInteger(0);
         @Override
         public void handle(String target, Request baseRequest, HttpServletRequest request, HttpServletResponse response) throws IOException {
             final int seq = sequence.getAndIncrement();
-            Log.d(TAG, "Got connection: " + seq);
+            Log.d(TAG, "handle() Got connection: " + seq);
             if (surfaceEncoder == null ||
                     surfaceEncoder.getState() == SurfaceEncoder.State.RELEASED ||
                     cameraDevice == null || surfaceHolder == null) {
@@ -470,14 +444,15 @@ import java.util.concurrent.atomic.AtomicInteger;
                         }
                     }
                     try {
-                        Log.d(TAG, "Waiting for server start...");
+                        //Log.d(TAG, "handle() Waiting for server start... " + seq);
                         streamSemaphore.acquire();
+                        //Log.d(TAG, "handle() Server Started: " + seq);
                     } catch (InterruptedException e) {
-                        Log.e(TAG, "Waiting for server start", e);
+                        Log.e(TAG, "handle() Waiting for server start", e);
+                        return;
                     }
-                    return;
                 } else {
-                    Log.e(TAG, "Too many sessions");
+                    Log.e(TAG, "handle() Too many sessions: " + seq);
                     // We are overrun
                     response.setStatus(HttpServletResponse.SC_SERVICE_UNAVAILABLE);
                     response.setHeader(HttpHeaders.RETRY_AFTER, "60");
@@ -492,12 +467,13 @@ import java.util.concurrent.atomic.AtomicInteger;
                 ByteBuffer byteBuffer = null;
                 while (true) {
                     byteBuffer = fragmentServer.getFragment(byteBuffer);
-                    Log.d(TAG, "Sending " + byteBuffer.remaining());
+                    //Log.d(TAG, "Sending " + byteBuffer.remaining());
                     out.write(byteBuffer.array());
                     out.flush();
                 }
-            } catch (InterruptedException | ClosedChannelException e) {
+            } catch (Exception e) {
                 // Just ignore this, it's normal
+                //Log.d(TAG, "handle() exception", e);
             } finally {
                 streamSemaphore.release();
                 connectionData.postValue(MAX_CLIENTS - streamSemaphore.availablePermits());
@@ -505,7 +481,7 @@ import java.util.concurrent.atomic.AtomicInteger;
                 workHandler.removeCallbacks(idleCheck);
                 workHandler.postDelayed(idleCheck, MEDIA_CODEC_IDLE_MS);
             }
-            Log.d(TAG, "Closed: " + seq);
+            Log.d(TAG, "handle() Closed: " + seq);
         }
     }
 }

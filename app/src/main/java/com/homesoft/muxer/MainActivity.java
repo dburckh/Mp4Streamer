@@ -4,43 +4,40 @@ import androidx.activity.result.ActivityResultLauncher;
 import androidx.activity.result.contract.ActivityResultContracts;
 import androidx.annotation.NonNull;
 import androidx.appcompat.app.AppCompatActivity;
-import androidx.constraintlayout.widget.ConstraintLayout;
 import androidx.lifecycle.ViewModelProvider;
 import androidx.media3.common.util.UnstableApi;
 
 import android.Manifest;
-import android.content.ContentResolver;
-import android.net.Uri;
 import android.os.Bundle;
 import android.util.Log;
 import android.util.Size;
+import android.util.SparseIntArray;
 import android.view.Surface;
 import android.view.SurfaceHolder;
-import android.view.SurfaceView;
-import android.view.View;
-import android.widget.Button;
 import android.widget.TextView;
 
-import java.net.InetSocketAddress;
 import java.util.ArrayList;
-import java.util.concurrent.Executor;
-import java.util.concurrent.Executors;
 
 @UnstableApi public class MainActivity extends AppCompatActivity implements SurfaceHolder.Callback {
     private static final String TAG = MainActivity.class.getSimpleName();
+
+    /**
+     * Conversion from screen rotation to JPEG orientation.
+     */
+    private static final SparseIntArray ORIENTATIONS = new SparseIntArray();
+
+    static {
+        ORIENTATIONS.append(Surface.ROTATION_0, 0);
+        ORIENTATIONS.append(Surface.ROTATION_90, 90);
+        ORIENTATIONS.append(Surface.ROTATION_180, 180);
+        ORIENTATIONS.append(Surface.ROTATION_270, 270);
+    }
     private AutoFixSurfaceView surfaceView;
 
     private TextView url;
     private TextView clients;
 
     private CameraViewModel cameraViewModel;
-
-    Executor executor = Executors.newSingleThreadExecutor();
-    private final ActivityResultLauncher<String[]> mGetMp4 = registerForActivityResult(new ActivityResultContracts.OpenDocument(), uri -> {
-        if (uri != null) {
-            executor.execute(new Remuxer(getBaseContext(), uri));
-        }
-    });
 
     private final ActivityResultLauncher<String[]> mGetCameraPermissions = registerForActivityResult(new ActivityResultContracts.RequestMultiplePermissions(), o -> {
         cameraViewModel.init();
@@ -51,7 +48,7 @@ import java.util.concurrent.Executors;
     protected void onCreate(Bundle savedInstanceState) {
         super.onCreate(savedInstanceState);
         setContentView(R.layout.activity_main);
-        cameraViewModel = new ViewModelProvider.AndroidViewModelFactory(getApplication()).create(CameraViewModel.class);
+        cameraViewModel = new ViewModelProvider(this).get(CameraViewModel.class);
         url = findViewById(R.id.url);
         clients = findViewById(R.id.clients);
 
@@ -76,6 +73,7 @@ import java.util.concurrent.Executors;
         });
         surfaceView = findViewById(R.id.surfaceView);
         surfaceView.getHolder().addCallback(this);
+        surfaceView.setKeepScreenOn(true);
     }
 
     @Override
@@ -123,15 +121,29 @@ import java.util.concurrent.Executors;
     }
 
     private void resizeSurface() {
-        Size size = cameraViewModel.getDisplaySize(this);
+        Size size = cameraViewModel.getImageSize();
         if (size != null) {
-            ConstraintLayout.LayoutParams lp = (ConstraintLayout.LayoutParams)surfaceView.getLayoutParams();
-            String ratio = size.getWidth() + ":" + size.getHeight();
-            if (!ratio.equals(lp.dimensionRatio)) {
-                Log.d(TAG, "resizeSurfaceView: " + ratio);
-                lp.dimensionRatio = ratio;
-                surfaceView.setLayoutParams(lp);
-                surfaceView.setAspectRatio(size.getWidth(), size.getHeight());
+            int deviceOrientation = getWindowManager().getDefaultDisplay().getRotation();
+
+            // Get device orientation in degrees
+            // We use front camera, so negate
+            int deviceRotation = -ORIENTATIONS.get(deviceOrientation);
+            int sensorRotation = cameraViewModel.getSensorRotation();
+
+            // Calculate desired JPEG orientation relative to camera orientation to make
+            // the image upright relative to the device orientation
+            int rotation = (sensorRotation + deviceRotation + 360) % 360;
+            final Size displaySize;
+            if (rotation == 90 || rotation == 270) {
+                displaySize = new Size(size.getHeight(), size.getWidth());
+            } else {
+                displaySize = size;
+            }
+            surfaceView.setAspectRatio(displaySize.getWidth(), displaySize.getHeight());
+            final SurfaceHolder surfaceHolder = surfaceView.getHolder();
+            if (surfaceHolder != null) {
+                Size imageSize = cameraViewModel.getImageSize();
+                surfaceHolder.setFixedSize(imageSize.getWidth(), imageSize.getHeight());
             }
         }
     }

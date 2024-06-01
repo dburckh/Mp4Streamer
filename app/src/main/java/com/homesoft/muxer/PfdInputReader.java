@@ -1,15 +1,21 @@
 package com.homesoft.muxer;
 
 import android.media.MediaParser;
+import android.os.Build;
 import android.os.ParcelFileDescriptor;
 
 import androidx.annotation.NonNull;
+import androidx.annotation.RequiresApi;
 
 import java.io.FileInputStream;
 import java.io.IOException;
 import java.nio.ByteBuffer;
 import java.nio.channels.FileChannel;
 
+/**
+ * Not used
+ */
+@RequiresApi(api = Build.VERSION_CODES.R)
 public class PfdInputReader implements MediaParser.SeekableInputReader {
     private FileChannel fileChannel;
     public PfdInputReader(ParcelFileDescriptor pfd) {

@@ -30,6 +30,9 @@ import java.util.Arrays;
 import java.util.HashMap;
 import java.util.List;
 
+/**
+ * Not used
+ */
 @RequiresApi(Build.VERSION_CODES.R)
 public class Remuxer implements MediaParser.OutputConsumer, Runnable {
     private static final int MAX_B_FRAMES = 4;
